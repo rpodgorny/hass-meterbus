@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -47,7 +48,14 @@ class MeterBusEntity(CoordinatorEntity[MeterBusCoordinator]):
             # The full secondary address, which is what a bus scan, the meter's
             # own label and any other M-Bus tool all agree on.
             serial_number=address,
-            via_device=(DOMAIN, coordinator.config_entry.entry_id),
+            # DeviceInfo needs the hub's generated registry id here, not its
+            # identifier tuple. The hub is registered before this platform is
+            # forwarded, so the lookup is guaranteed to succeed.
+            via_device_id=dr.async_get_device_id_by_identifier(
+                coordinator.hass,
+                (DOMAIN, coordinator.config_entry.entry_id),
+                config_entry_id=coordinator.config_entry.entry_id,
+            ),
         )
 
     @property
