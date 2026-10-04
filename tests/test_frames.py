@@ -1,9 +1,9 @@
 """Offline tests against frames captured from real meters.
 
-Every hex string below came off a live M-Bus and is reproduced byte for byte,
-so this pins the decode path against the actual hardware rather than against a
-reading of the standard. Needs pyMeterBus and nothing else — no Home Assistant,
-no serial port, no meters::
+The original capture fixtures came off a live M-Bus byte for byte; additional
+synthetic frames are explicitly labelled below.
+This tests both captured replies and targeted protocol edge cases. Needs
+pyMeterBus and nothing else — no Home Assistant, no serial port, no meters::
 
     python3 tests/test_frames.py
 """
@@ -424,8 +424,11 @@ def test_every_entity_name_and_icon_is_translated():
         # Both as-is and as a heat meter would present it.
         for variant in (sensor, profiles._for_medium(sensor, 0x04)):
             for storage, tariff in ((0, None), (0, 1), (1, None), (1, 1)):
-                _, key, placeholders, _ = profiles._decorate(variant, storage, tariff)
-                required.add((key, tuple(sorted(placeholders))))
+                for device in (0, 1, 2):
+                    _, key, placeholders, _ = profiles._decorate(
+                        variant, storage, tariff, device
+                    )
+                    required.add((key, tuple(sorted(placeholders))))
 
     missing = {key for key, _ in required} - set(names)
     assert not missing, f"no name in strings.json for: {sorted(missing)}"
@@ -464,6 +467,87 @@ def test_mask_matching():
     assert api._matches("0014280901060307", "0014280901060307")
     assert not api._matches("0014280901060307", "001429FFFFFFFFFF")
     assert not api._matches("0014280901060307", "00142809010603")
+
+
+
+def _synthetic_heat_channels(serial=1, extra_records=b""):
+    """Synthetic HYD v43 reply; reported scales/channels, anonymized serial.
+
+    This is not a raw capture. The user supplied decoded records with a main
+    0.0001 m³ register and two 0.001 m³ pulse-input registers (devices 1/2).
+    Device 2 needs two DIFEs, which also tests higher device bits.
+    """
+    header = bytes([0x08, 0, 0x72, serial, 0, 0, 0, 0x24, 0x23, 0x2B, 4, 0, 0, 0, 0])
+    records = (
+        bytes([0x04, 0x12]) + (28346507).to_bytes(4, "little")
+        + bytes([0x84, 0x40, 0x13]) + (194530).to_bytes(4, "little")
+        + bytes([0x84, 0x80, 0x40, 0x13]) + (714701).to_bytes(4, "little")
+        + extra_records
+    )
+    body = header + records
+    return bytes([0x68, len(body), len(body), 0x68]) + body + bytes([sum(body) % 256, 0x16])
+
+
+def test_additional_device_channels_survive_decoding():
+    """Equal quantity/storage/tariff must not collapse different devices."""
+    reading = api.parse_frame(_synthetic_heat_channels())
+    assert [r.device for r in reading.records] == [0, 1, 2]
+    points = _keys(reading)
+    assert list(points) == ["volume", "volume_device_1", "volume_device_2"]
+    for key, expected in (("volume", 2834.6507), ("volume_device_1", 194.530),
+                          ("volume_device_2", 714.701)):
+        point = points[key]
+        assert _close(point.value, expected), (key, point.value)
+        assert point.unit == "m³"
+        assert point.sensor.state_class == "total_increasing"
+        assert point.enabled
+    assert points["volume"].translation_key == "circuit_volume"
+    for device in (1, 2):
+        point = points[f"volume_device_{device}"]
+        assert point.translation_key == "volume_device"
+        assert point.placeholders == {"device": str(device)}
+        # The input number alone does not establish water consumption.
+        assert point.sensor.device_class == "volume"
+
+
+def test_device_channels_remain_separate_on_multiple_meters():
+    """The same channels on multiple meter addresses retain distinct identities."""
+    readings = [api.parse_frame(_synthetic_heat_channels(i)) for i in (1, 2, 3)]
+    identifiers = {
+        (reading.address, point.key)
+        for reading in readings for point in profiles.sensors_for(reading)
+    }
+    assert len(identifiers) == 9
+    for reading in readings:
+        assert len(profiles.values_for(reading)) == 3
+
+
+def test_device_channel_tariff_and_snapshot():
+    """Device qualifiers compose with tariff/storage without enabling snapshots."""
+    # DIF 0xC4: storage 1. DIFE 0x50: device 1 and tariff 1.
+    extra = bytes([0xC4, 0x50, 0x13]) + (180000).to_bytes(4, "little")
+    points = _keys(api.parse_frame(_synthetic_heat_channels(extra_records=extra)))
+    point = points["volume_t1_prev1_device_1"]
+    assert _close(point.value, 180)
+    assert not point.enabled
+    assert point.sensor.state_class is None
+    assert point.translation_key == "volume_tariff_previous_device"
+    assert point.placeholders == {"tariff": "1", "period": "1", "device": "1"}
+
+
+def test_repeated_device_record_is_still_deduplicated():
+    extra = bytes([0x84, 0x40, 0x13]) + (194530).to_bytes(4, "little")
+    reading = api.parse_frame(_synthetic_heat_channels(extra_records=extra))
+    assert len(reading.records) == 4
+    assert len(profiles.sensors_for(reading)) == 3
+
+
+def test_explicit_device_zero_preserves_existing_identity():
+    # DIFE explicitly specifies zero; it must match an omitted device number.
+    extra = bytes([0x84, 0, 0x12]) + (28346507).to_bytes(4, "little")
+    reading = api.parse_frame(_synthetic_heat_channels(extra_records=extra))
+    assert reading.records[-1].device == 0
+    assert list(_keys(reading)) == ["volume", "volume_device_1", "volume_device_2"]
 
 
 def _main():

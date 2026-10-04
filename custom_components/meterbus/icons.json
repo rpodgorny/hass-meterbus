@@ -36,6 +36,42 @@
       },
       "heat_energy_tariff_previous": {
         "default": "mdi:fire"
+      },
+      "circuit_volume_device": {
+        "default": "mdi:pipe"
+      },
+      "circuit_volume_tariff_device": {
+        "default": "mdi:pipe"
+      },
+      "circuit_volume_previous_device": {
+        "default": "mdi:pipe"
+      },
+      "circuit_volume_tariff_previous_device": {
+        "default": "mdi:pipe"
+      },
+      "error_flags_device": {
+        "default": "mdi:alert"
+      },
+      "error_flags_tariff_device": {
+        "default": "mdi:alert"
+      },
+      "error_flags_previous_device": {
+        "default": "mdi:alert"
+      },
+      "error_flags_tariff_previous_device": {
+        "default": "mdi:alert"
+      },
+      "heat_energy_device": {
+        "default": "mdi:fire"
+      },
+      "heat_energy_tariff_device": {
+        "default": "mdi:fire"
+      },
+      "heat_energy_previous_device": {
+        "default": "mdi:fire"
+      },
+      "heat_energy_tariff_previous_device": {
+        "default": "mdi:fire"
       }
     }
   }

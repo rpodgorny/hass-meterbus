@@ -131,6 +131,7 @@ class Record:
     storage: int
     tariff: int | None
     value: object
+    device: int = 0
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ def _interpret(telegram) -> MeterReading:
                 storage=int(data.get("storage_number", 0)),
                 tariff=data.get("tariff"),
                 value=data.get("value"),
+                device=int(data.get("device") or 0),
             )
         )
     return MeterReading(
@@ -698,7 +700,7 @@ def _main() -> None:
         for rec in reading.records:
             print(
                 f"    {rec.vif:34s} {rec.unit:22s}"
-                f" st={rec.storage} tar={rec.tariff}"
+                f" st={rec.storage} tar={rec.tariff} dev={rec.device}"
                 f" {rec.function.split('.')[-1]:20s} {rec.value}"
             )
     bus.close()

@@ -199,6 +199,19 @@ integration does not need to.
 Then assign meters to **areas** (by flat or riser) and the device list stops
 being one flat wall.
 
+### Meters with additional device channels
+
+The M-Bus device number distinguishes additional measurement channels within
+one meter. For example, a heat meter can also report two external pulse-input
+volumes. Nonzero channels get separate sensors named `Volume device 1`,
+`Volume device 2`, etc.; tariff and billing-period variants stay separate too.
+The main channel keeps its existing entity identifiers and history.
+
+Channel numbers do not specify what is connected. Rename the auxiliary sensors
+in Home Assistant to match the installation (for example, hot and cold water).
+Auxiliary volumes on heat meters use the generic volume class; assigning water
+consumption semantics requires knowing what each input actually measures.
+
 ### What is deliberately not exposed
 
 - **Maximum and minimum registers.** The Siemens electricity meters report

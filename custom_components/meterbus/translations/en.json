@@ -231,6 +231,174 @@
       },
       "volume_flow_tariff_previous": {
         "name": "Flow tariff {tariff} previous period {period}"
+      },
+      "circuit_volume_device": {
+        "name": "Circuit volume device {device}"
+      },
+      "circuit_volume_tariff_device": {
+        "name": "Circuit volume tariff {tariff} device {device}"
+      },
+      "circuit_volume_previous_device": {
+        "name": "Circuit volume previous period {period} device {device}"
+      },
+      "circuit_volume_tariff_previous_device": {
+        "name": "Circuit volume tariff {tariff} previous period {period} device {device}"
+      },
+      "energy_device": {
+        "name": "Energy device {device}"
+      },
+      "energy_tariff_device": {
+        "name": "Energy tariff {tariff} device {device}"
+      },
+      "energy_previous_device": {
+        "name": "Energy previous period {period} device {device}"
+      },
+      "energy_tariff_previous_device": {
+        "name": "Energy tariff {tariff} previous period {period} device {device}"
+      },
+      "error_flags_device": {
+        "name": "Error flags device {device}"
+      },
+      "error_flags_tariff_device": {
+        "name": "Error flags tariff {tariff} device {device}"
+      },
+      "error_flags_previous_device": {
+        "name": "Error flags previous period {period} device {device}"
+      },
+      "error_flags_tariff_previous_device": {
+        "name": "Error flags tariff {tariff} previous period {period} device {device}"
+      },
+      "external_temperature_device": {
+        "name": "External temperature device {device}"
+      },
+      "external_temperature_tariff_device": {
+        "name": "External temperature tariff {tariff} device {device}"
+      },
+      "external_temperature_previous_device": {
+        "name": "External temperature previous period {period} device {device}"
+      },
+      "external_temperature_tariff_previous_device": {
+        "name": "External temperature tariff {tariff} previous period {period} device {device}"
+      },
+      "flow_temperature_device": {
+        "name": "Flow temperature device {device}"
+      },
+      "flow_temperature_tariff_device": {
+        "name": "Flow temperature tariff {tariff} device {device}"
+      },
+      "flow_temperature_previous_device": {
+        "name": "Flow temperature previous period {period} device {device}"
+      },
+      "flow_temperature_tariff_previous_device": {
+        "name": "Flow temperature tariff {tariff} previous period {period} device {device}"
+      },
+      "heat_energy_device": {
+        "name": "Heat energy device {device}"
+      },
+      "heat_energy_tariff_device": {
+        "name": "Heat energy tariff {tariff} device {device}"
+      },
+      "heat_energy_previous_device": {
+        "name": "Heat energy previous period {period} device {device}"
+      },
+      "heat_energy_tariff_previous_device": {
+        "name": "Heat energy tariff {tariff} previous period {period} device {device}"
+      },
+      "mass_device": {
+        "name": "Mass device {device}"
+      },
+      "mass_tariff_device": {
+        "name": "Mass tariff {tariff} device {device}"
+      },
+      "mass_previous_device": {
+        "name": "Mass previous period {period} device {device}"
+      },
+      "mass_tariff_previous_device": {
+        "name": "Mass tariff {tariff} previous period {period} device {device}"
+      },
+      "on_time_device": {
+        "name": "On time device {device}"
+      },
+      "on_time_tariff_device": {
+        "name": "On time tariff {tariff} device {device}"
+      },
+      "on_time_previous_device": {
+        "name": "On time previous period {period} device {device}"
+      },
+      "on_time_tariff_previous_device": {
+        "name": "On time tariff {tariff} previous period {period} device {device}"
+      },
+      "operating_time_device": {
+        "name": "Operating time device {device}"
+      },
+      "operating_time_tariff_device": {
+        "name": "Operating time tariff {tariff} device {device}"
+      },
+      "operating_time_previous_device": {
+        "name": "Operating time previous period {period} device {device}"
+      },
+      "operating_time_tariff_previous_device": {
+        "name": "Operating time tariff {tariff} previous period {period} device {device}"
+      },
+      "power_device": {
+        "name": "Power device {device}"
+      },
+      "power_tariff_device": {
+        "name": "Power tariff {tariff} device {device}"
+      },
+      "power_previous_device": {
+        "name": "Power previous period {period} device {device}"
+      },
+      "power_tariff_previous_device": {
+        "name": "Power tariff {tariff} previous period {period} device {device}"
+      },
+      "return_temperature_device": {
+        "name": "Return temperature device {device}"
+      },
+      "return_temperature_tariff_device": {
+        "name": "Return temperature tariff {tariff} device {device}"
+      },
+      "return_temperature_previous_device": {
+        "name": "Return temperature previous period {period} device {device}"
+      },
+      "return_temperature_tariff_previous_device": {
+        "name": "Return temperature tariff {tariff} previous period {period} device {device}"
+      },
+      "temperature_difference_device": {
+        "name": "Temperature difference device {device}"
+      },
+      "temperature_difference_tariff_device": {
+        "name": "Temperature difference tariff {tariff} device {device}"
+      },
+      "temperature_difference_previous_device": {
+        "name": "Temperature difference previous period {period} device {device}"
+      },
+      "temperature_difference_tariff_previous_device": {
+        "name": "Temperature difference tariff {tariff} previous period {period} device {device}"
+      },
+      "volume_device": {
+        "name": "Volume device {device}"
+      },
+      "volume_tariff_device": {
+        "name": "Volume tariff {tariff} device {device}"
+      },
+      "volume_previous_device": {
+        "name": "Volume previous period {period} device {device}"
+      },
+      "volume_tariff_previous_device": {
+        "name": "Volume tariff {tariff} previous period {period} device {device}"
+      },
+      "volume_flow_device": {
+        "name": "Flow device {device}"
+      },
+      "volume_flow_tariff_device": {
+        "name": "Flow tariff {tariff} device {device}"
+      },
+      "volume_flow_previous_device": {
+        "name": "Flow previous period {period} device {device}"
+      },
+      "volume_flow_tariff_previous_device": {
+        "name": "Flow tariff {tariff} previous period {period} device {device}"
       }
     }
   }

@@ -198,11 +198,11 @@ class SensorPoint:
 
 
 def _decorate(
-    sensor: Sensor, storage: int, tariff: int | None
+    sensor: Sensor, storage: int, tariff: int | None, device: int = 0
 ) -> tuple[str, str, dict[str, str], bool]:
     """Return (key, translation_key, placeholders, enabled) for one variant.
 
-    Storage and tariff are not separate kinds of sensor, they are qualifiers on
+    Storage, tariff and device are not separate kinds of sensor, they qualify
     the same one — which is why they decorate a row rather than needing rows of
     their own. Nine Siemens energy registers collapse to one table entry.
 
@@ -224,6 +224,10 @@ def _decorate(
         translation_key = f"{translation_key}_previous"
         placeholders["period"] = str(storage)
         enabled = False
+    if device:
+        key = f"{key}_device_{device}"
+        translation_key = f"{translation_key}_device"
+        placeholders["device"] = str(device)
     return key, translation_key, placeholders, enabled
 
 
@@ -234,7 +238,7 @@ def sensors_for(reading: MeterReading) -> list[SensorPoint]:
     for record in reading.records:
         point = _point_for(record, reading.medium)
         if point is None or point.key in seen:
-            # A meter repeating the same (record, storage, tariff) triple would
+            # A meter repeating the same (record, storage, tariff, device) would
             # otherwise collide on unique_id and lose one of the two silently.
             continue
         seen.add(point.key)
@@ -258,12 +262,12 @@ def _point_for(record: Record, medium: int) -> SensorPoint | None:
     sensor = SENSORS.get((record.vif, record.unit))
     if sensor is None:
         return None
-    sensor = _for_medium(sensor, medium)
+    sensor = _for_medium(sensor, medium, record.device)
     value = _numeric(record.value)
     if value is None:
         return None
     key, translation_key, placeholders, enabled = _decorate(
-        sensor, record.storage, record.tariff
+        sensor, record.storage, record.tariff, record.device
     )
     if record.storage:
         sensor = replace(sensor, enabled=enabled, state_class=None)
@@ -278,7 +282,7 @@ def _point_for(record: Record, medium: int) -> SensorPoint | None:
     )
 
 
-def _for_medium(sensor: Sensor, medium: int) -> Sensor:
+def _for_medium(sensor: Sensor, medium: int, device: int = 0) -> Sensor:
     """Adjust a row for what the meter actually measures.
 
     The record says "volume in m³" whether the meter is a water meter or a heat
@@ -303,6 +307,10 @@ def _for_medium(sensor: Sensor, medium: int) -> Sensor:
     """
     if medium not in _CIRCULATING_MEDIA:
         return sensor
+    if sensor.key == "volume" and device:
+        # An auxiliary volume need not belong to the heating circuit. Its
+        # channel number alone does not identify the medium or hot/cold water.
+        return replace(sensor, device_class="volume", translation_key="volume")
     if sensor.key == "volume":
         return replace(sensor, device_class="volume", translation_key="circuit_volume")
     if sensor.key == "energy":
