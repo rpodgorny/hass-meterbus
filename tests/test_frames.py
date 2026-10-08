@@ -14,6 +14,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 
 # Load the integration's Home-Assistant-free modules without importing the
 # package itself (its __init__ pulls in homeassistant).
@@ -63,6 +64,32 @@ SIE_ELECTRICITY = bytes.fromhex(
     " 00 00 00 AC 20 04 00 00 00 00 81 16"
 )
 
+# Heat meter behind a TCP bridge. ACKs arrive within 100 ms, but the bridge
+# delivers this 207-byte reply about a second after the request's write.
+KAM_HEAT = bytes.fromhex(
+    "68 C9 C9 68 08 A2 72 62 01 29 86 2D 2C 34 04 06 10 00 00 04 FB 08"
+    " 00 00 00 00 04 FF 07 00 00 00 00 04 FF 08 00 00 00 00 04 15 00 00"
+    " 00 00 84 40 14 00 00 00 00 84 80 40 14 00 00 00 00 04 22 AD 3A 00"
+    " 00 34 22 00 00 00 00 02 59 B4 08 02 5D 15 09 02 61 9F FF 04 2D 00"
+    " 00 00 00 14 2D 00 00 00 00 04 3B 00 00 00 00 14 3B 00 00 00 00 04"
+    " FF 22 00 01 00 00 04 6D 24 28 5B 39 44 FB 08 00 00 00 00 44 FF 07"
+    " 00 00 00 00 44 FF 08 00 00 00 00 44 15 00 00 00 00 C4 40 14 00 00"
+    " 00 00 C4 80 40 14 00 00 00 00 54 2D 00 00 00 00 54 3B 00 00 00 00"
+    " 42 6C 41 31 02 FF 1A 01 1A 0C 78 62 01 29 86 04 FF 16 E5 84 1E 00"
+    " 04 FF 17 2D 00 0F 01 81 16"
+)
+
+
+def _kam_heat_with_energy(vife: int, raw: int) -> bytes:
+    """Derive a valid frame with a nonzero FB08 or FB09 energy register."""
+    frame = bytearray(KAM_HEAT)
+    marker = bytes.fromhex("04 FB 08 00 00 00 00")
+    offset = frame.index(marker)
+    frame[offset + 2] = vife
+    frame[offset + 3 : offset + 7] = raw.to_bytes(4, "little")
+    frame[-2] = sum(frame[4:-2]) & 0xFF
+    return bytes(frame)
+
 
 def _keys(reading):
     """Sensor key -> SensorPoint for one reading."""
@@ -101,6 +128,42 @@ def test_apa_water():
     # integers carry no row in the table, so they produce no entities.
     for absent in ("fabrication_no", "date_time", "manufacturer_spec"):
         assert absent not in points, absent
+
+
+def test_kam_heat():
+    """The slow bridge's reply must also survive the real decoder."""
+    reading = api.parse_frame(KAM_HEAT)
+    assert len(KAM_HEAT) == 207, len(KAM_HEAT)
+    assert reading.address == "862901622D2C3404", reading.address
+    assert reading.manufacturer == "KAM", reading.manufacturer
+    assert reading.medium_name == "Heat", reading.medium_name
+    assert len(reading.records) == 30, len(reading.records)
+
+    points = _keys(reading)
+    energy = points["energy"]
+    assert _close(energy.value, 0.0)
+    assert energy.unit == "GJ"
+    assert energy.sensor.device_class == "energy"
+    assert energy.sensor.state_class == "total_increasing"
+    assert energy.sensor.precision == 1
+    assert energy.translation_key == "heat_energy"
+
+    previous = points["energy_prev1"]
+    assert not previous.enabled
+    assert previous.sensor.state_class is None
+
+
+def test_kam_heat_extended_energy_scaling():
+    """FB08 and FB09 values are joules despite pyMeterBus naming the unit Reserved."""
+    for vife, joules in ((0x08, 100_000_000), (0x09, 1_000_000_000)):
+        reading = api.parse_frame(_kam_heat_with_energy(vife, 1))
+        record = reading.records[0]
+        assert record.vif == "Energy", record.vif
+        assert record.unit == "Reserved", record.unit
+        assert record.value == joules, record.value
+        energy = _keys(reading)["energy"]
+        assert energy.unit == "GJ"
+        assert _close(energy.value, joules / 1e9)
 
 
 def test_apa_snapshot_is_not_a_counter():
@@ -464,6 +527,172 @@ def test_mask_matching():
     assert api._matches("0014280901060307", "0014280901060307")
     assert not api._matches("0014280901060307", "001429FFFFFFFFFF")
     assert not api._matches("0014280901060307", "00142809010603")
+
+
+class _Clock:
+    """Move time forward without making a slow bus slow down the test suite."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class _TimedPort(_FakePort):
+    """A bridge that drops early requests and delivers replies after a delay."""
+
+    def __init__(self, clock, replies, delays, turnaround=0.0):
+        super().__init__(replies)
+        self.clock = clock
+        self.delays = list(delays)
+        self.turnaround = turnaround
+        self.timeout = 2.0
+        self.ready_at = 0.0
+        self.last_reply_at = None
+        self.early = []
+        self.write_timeouts = []
+
+    def write(self, data):
+        self.written.append(bytes(data))
+        self.write_timeouts.append(self.timeout)
+        reply = self.replies.pop(0) if self.replies else b""
+        delay = self.delays.pop(0) if self.delays else 0.0
+        if (
+            self.last_reply_at is not None
+            and self.clock.now - self.last_reply_at < self.turnaround - 1e-9
+        ):
+            self.early.append(bytes(data))
+            reply = b""
+        self._rx = bytearray(reply)
+        self.ready_at = self.clock.now + delay
+
+    def read(self, count=1):
+        if not self._rx or self.ready_at > self.clock.now + self.timeout:
+            self.clock.sleep(self.timeout)
+            return b""
+        self.clock.now = max(self.clock.now, self.ready_at)
+        chunk = super().read(count)
+        if not self._rx:
+            self.last_reply_at = self.clock.now
+        return chunk
+
+
+def test_discovery_waits_for_a_slow_data_reply():
+    """A bridge may return ACKs promptly but buffer a whole second of data.
+
+    Using the select timeout for both loses the meter before its first data
+    byte arrives. A longer data timeout must not lengthen the ACK waits.
+    """
+    clock = _Clock()
+    port = _TimedPort(clock, [_ACK, _ACK, KAM_HEAT], [0.04, 0.10, 0.99])
+    bus = api.MeterBus(port=port)
+    with patch.object(api, "time", clock):
+        outcome, address = bus._probe("86290162FFFFFFFF")
+    assert outcome == api._SINGLE, outcome
+    assert address == "862901622D2C3404", address
+    assert port.write_timeouts == [0.5, 0.5, 2.0], port.write_timeouts
+    assert port.timeout == bus._timeout_value, port.timeout
+
+
+def test_polling_and_discovery_leave_the_bus_time_to_turn_around():
+    """Receiving an ACK does not mean the bridge can accept the next write."""
+    for discovery in (False, True):
+        clock = _Clock()
+        port = _TimedPort(
+            clock, [_ACK, _ACK, APA_WATER], [0.04, 0.10, 0.99], turnaround=0.10
+        )
+        bus = api.MeterBus(port=port)
+        with patch.object(api, "time", clock):
+            if discovery:
+                outcome, _ = bus._probe("001428FFFFFFFFFF")
+                assert outcome == api._SINGLE, outcome
+            else:
+                assert bus.read("0014280901060307").address == "0014280901060307"
+        assert not port.early, port.early
+
+
+def test_bus_delay_is_configurable_and_does_not_repeat_after_idle():
+    """A caller can tune turnaround; time already spent idle counts toward it."""
+    clock = _Clock()
+    port = _TimedPort(clock, [APA_WATER] * 3, [0.01] * 3, turnaround=0.25)
+    bus = api.MeterBus(port=port, inter_frame_delay=0.25)
+    with patch.object(api, "time", clock):
+        bus._request(first=True)
+        bus._request(first=False)
+        assert _close(clock.now, 0.27), clock.now
+        clock.sleep(1.0)
+        bus._request(first=False)
+        assert _close(clock.now, 1.28), clock.now
+    assert not port.early, port.early
+
+
+def test_discovery_initialization_waits_for_an_active_transaction():
+    """The initial reset must not cut across a polling reply already in flight."""
+    import threading
+
+    for method in ("probe", "scan"):
+        bus = api.MeterBus(port=_FakePort([]))
+        started = threading.Event()
+        initialized = threading.Event()
+        bus._init = initialized.set
+        bus._probe = lambda mask: (api._SINGLE, "0014280901060307")
+        bus._scan_mask = lambda *args, **kwargs: 0
+
+        def discover():
+            started.set()
+            getattr(bus, method)()
+
+        thread = threading.Thread(target=discover)
+        try:
+            with bus._lock:
+                thread.start()
+                assert started.wait(1.0), "discovery did not start"
+                assert not initialized.wait(0.05), "reset interrupted a transaction"
+        finally:
+            thread.join(1.0)
+        assert not thread.is_alive(), "discovery did not finish"
+        assert initialized.is_set(), "discovery never initialized the bus"
+
+
+def test_scan_does_not_recurse_on_the_same_final_wildcard():
+    """Trying F in an F position must not restart the same branch forever."""
+    bus = api.MeterBus(port=_FakePort([]))
+    mask = "001428090106030F"
+    walked = []
+
+    def probe(candidate):
+        walked.append(candidate)
+        assert len(walked) <= 40, "scan keeps revisiting the same wildcard"
+        return (api._COLLISION, None) if candidate == mask else (api._EMPTY, None)
+
+    bus._probe = probe
+    with patch.object(api, "time", _Clock()):
+        assert bus.scan(mask) == []
+
+
+def test_scan_keeps_searching_after_an_f_branch():
+    """Skipping F entirely would hide meters whose header contains that digit."""
+    bus = api.MeterBus(port=_FakePort([]))
+    mask = "00142809010603FF"
+    address = "00142809010603F7"
+    walked = []
+
+    def probe(candidate):
+        walked.append(candidate)
+        assert len(walked) <= 100, "scan does not advance beyond F"
+        if candidate == mask:
+            return api._COLLISION, None
+        if candidate == address:
+            return api._SINGLE, address
+        return api._EMPTY, None
+
+    bus._probe = probe
+    with patch.object(api, "time", _Clock()):
+        assert bus.scan(mask) == [address]
 
 
 def _main():

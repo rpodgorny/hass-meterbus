@@ -91,6 +91,17 @@ SENSORS: dict[tuple[str, str], Sensor] = {
         scale=_J_TO_KWH,
         precision=2,
     ),
+    # pyMeterBus 0.8.4 decodes the alternate VIFs FB08 and FB09 as
+    # ("Energy", "Reserved") and expands their GJ values to joules. Keep the
+    # unit declared by the meter while restoring the decimal GJ value.
+    ("Energy", "Reserved"): Sensor(
+        key="energy",
+        unit="GJ",
+        device_class="energy",
+        state_class="total_increasing",
+        scale=1e-9,
+        precision=1,
+    ),
     ("VIFUnit.VOLUME", "MeasureUnit.M3"): Sensor(
         key="volume",
         unit="m³",

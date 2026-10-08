@@ -57,6 +57,11 @@ DEFAULT_TIMEOUT = 2.0
 # minutes; at this one it is a few.
 SELECT_TIMEOUT = 0.5
 
+# A bridge can deliver an ACK before it is ready for the next request. On a
+# TCP heat-meter link, back-to-back writes lost selects and reads; a short
+# quiet interval after each reply lets both ends turn the bus around.
+DEFAULT_INTER_FRAME_DELAY = 0.1
+
 # After a collision several meters are still talking over each other. Sending
 # the next select straight away reads their tail as another collision, which
 # recurses, which collides again — the scan never converges. Wait for the bus
@@ -230,14 +235,19 @@ class MeterBus:
         tcp_port: int = DEFAULT_TCP_PORT,
         baud: int = DEFAULT_BAUD,
         timeout: float = DEFAULT_TIMEOUT,
+        inter_frame_delay: float = DEFAULT_INTER_FRAME_DELAY,
         port: Any = None,
     ) -> None:
         """Configure the master. ``port`` is an injection point for tests."""
         if not (serial_port or host or port):
             raise ValueError("need serial_port, host or port")
+        if inter_frame_delay < 0:
+            raise ValueError("inter_frame_delay must not be negative")
         self._url = serial_port or f"socket://{host}:{tcp_port}"
         self._baud = baud
         self._timeout_value = timeout
+        self._inter_frame_delay = inter_frame_delay
+        self._last_reply_at: float | None = None
         self._port: Any = port
         # Only a port we opened ourselves can be reopened after a failure. An
         # injected one has no recipe to rebuild it from, so dropping it on a
@@ -287,6 +297,19 @@ class MeterBus:
 
     # -- framing ---------------------------------------------------------
 
+    def _wait_for_bus(self) -> None:
+        """Leave a quiet interval after the last reply, including a timeout.
+
+        Count time already spent idle, so a normal polling interval or a
+        collision settle does not pay for the same pause twice. Use the same
+        gate for selects, resets and data requests, including follow-ups in a
+        multi-telegram reply.
+        """
+        if self._last_reply_at is not None:
+            remaining = self._inter_frame_delay - (time.monotonic() - self._last_reply_at)
+            if remaining > 0:
+                time.sleep(remaining)
+
     def _flush(self) -> None:
         """Drop anything already buffered, so a stale tail is not read as a reply."""
         port = self.connect()
@@ -312,7 +335,10 @@ class MeterBus:
         constantly — several meters answering at once produce bytes that decode
         to nothing — and conflating them is what loses meters.
         """
-        raw = meterbus.recv_frame(self.connect())
+        try:
+            raw = meterbus.recv_frame(self.connect())
+        finally:
+            self._last_reply_at = time.monotonic()
         if raw is None:
             return None, False
         if raw is False:
@@ -343,6 +369,7 @@ class MeterBus:
             control |= meterbus.CONTROL_MASK_FCB
         frame.header.cField.parts = [control]
         frame.header.aField.parts = [meterbus.ADDRESS_NETWORK_LAYER]
+        self._wait_for_bus()
         meterbus.serial_send(self.connect(), frame)
         return self._recv()
 
@@ -355,6 +382,7 @@ class MeterBus:
         """
         self._timeout(self._select_timeout)
         try:
+            self._wait_for_bus()
             meterbus.send_ping_frame(self.connect(), meterbus.ADDRESS_NETWORK_LAYER)
             self._recv()
         except (MeterBusError, meterbus.MBusFrameDecodeError):
@@ -367,6 +395,7 @@ class MeterBus:
 
     def _send_select(self, address: str) -> None:
         """Send a select frame for one secondary address or wildcard mask."""
+        self._wait_for_bus()
         meterbus.send_select_frame(self.connect(), address)
 
     def _select(self, address: str) -> bool:
@@ -475,8 +504,9 @@ class MeterBus:
         proves at least one meter is listening. Silence means a wrong port,
         wrong parity, no bus power, or nothing connected.
         """
-        self._init()
-        outcome, _ = self._probe(WILDCARD)
+        with self._lock:
+            self._init()
+            outcome, _ = self._probe(WILDCARD)
         if outcome is _EMPTY:
             raise MeterBusError("nothing answered on the bus")
 
@@ -501,7 +531,8 @@ class MeterBus:
         how much work each branch hides, which is what the scan exists to
         discover.
         """
-        self._init()
+        with self._lock:
+            self._init()
         found: list[str] = []
         self._scan_mask(mask, found, on_found, on_progress, collided=True)
         return sorted(found)
@@ -513,6 +544,7 @@ class MeterBus:
         on_found,
         on_progress,
         collided: bool,
+        start: int = 0,
     ) -> int:
         """Walk one prefix. Returns how many meters were found beneath it.
 
@@ -521,10 +553,10 @@ class MeterBus:
         probe rather than an empty branch (see the retry at the end).
         """
         try:
-            pos = mask.index("F")
+            pos = mask.index("F", start)
         except ValueError:
-            # Fully specified. Reached only when two meters answer to the same
-            # complete address, which cannot be narrowed any further.
+            # Every available position has been tried. Any remaining F was
+            # kept by a parent branch; revisiting it cannot narrow the mask.
             outcome, address = self._probe(mask)
             if outcome is _SINGLE and address:
                 self._add(address, found, on_found)
@@ -547,7 +579,10 @@ class MeterBus:
                 # cost of narrowing a branch that turns out to hold one meter is
                 # seconds; the cost of not narrowing a real collision is losing
                 # every meter under it.
-                self._scan_mask(candidate, found, on_found, on_progress, True)
+                # F is also one of the header's hex digits. Keeping it leaves
+                # the mask unchanged, so carry the position separately rather
+                # than finding that same F again on every recursive call.
+                self._scan_mask(candidate, found, on_found, on_progress, True, pos + 1)
                 continue
             if outcome is _SINGLE and address is not None:
                 self._add(address, found, on_found)
@@ -558,15 +593,19 @@ class MeterBus:
             # silently pruning here is what loses whole families of meters at a
             # stroke. Go round once more, slower.
             _LOGGER.debug("scan: %s collided but yielded nothing; retrying", mask)
-            return self._retry_mask(mask, found, on_found, on_progress)
+            return self._retry_mask(mask, found, on_found, on_progress, start)
         return len(found)
 
-    def _retry_mask(self, mask: str, found: list[str], on_found, on_progress) -> int:
+    def _retry_mask(
+        self, mask: str, found: list[str], on_found, on_progress, start: int = 0
+    ) -> int:
         """Re-walk a prefix with a longer timeout, once."""
         previous = self._select_timeout
         self._select_timeout = previous * _RETRY_TIMEOUT_FACTOR
         try:
-            return self._scan_mask(mask, found, on_found, on_progress, collided=False)
+            return self._scan_mask(
+                mask, found, on_found, on_progress, collided=False, start=start
+            )
         finally:
             self._select_timeout = previous
 
@@ -608,6 +647,10 @@ class MeterBus:
         try:
             self._send_select(mask)
             _, ack_bytes = self._read_reply()
+            # ACKs are short, but a TCP bridge may buffer the whole data frame
+            # before forwarding its first byte. Give data the full read timeout
+            # even when selecting the meter only took a few milliseconds.
+            self._timeout(self._timeout_value)
             telegram, data_bytes = self._request_reply()
         except OSError as err:
             _LOGGER.debug("scan: probe %s failed: %s", mask, err)
@@ -641,6 +684,7 @@ class MeterBus:
             meterbus.CONTROL_MASK_REQ_UD2 | meterbus.CONTROL_MASK_DIR_M2S
         ]
         frame.header.aField.parts = [meterbus.ADDRESS_NETWORK_LAYER]
+        self._wait_for_bus()
         meterbus.serial_send(self.connect(), frame)
         return self._read_reply()
 
@@ -649,6 +693,7 @@ class MeterBus:
         self._flush()
         self._timeout(self._select_timeout)
         try:
+            self._wait_for_bus()
             meterbus.send_ping_frame(self.connect(), meterbus.ADDRESS_NETWORK_LAYER)
             self._read_reply()
         except OSError:
