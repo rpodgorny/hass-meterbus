@@ -80,6 +80,17 @@ KAM_HEAT = bytes.fromhex(
 )
 
 
+def _kam_heat_with_energy(vife: int, raw: int) -> bytes:
+    """Derive a valid frame with a nonzero FB08 or FB09 energy register."""
+    frame = bytearray(KAM_HEAT)
+    marker = bytes.fromhex("04 FB 08 00 00 00 00")
+    offset = frame.index(marker)
+    frame[offset + 2] = vife
+    frame[offset + 3 : offset + 7] = raw.to_bytes(4, "little")
+    frame[-2] = sum(frame[4:-2]) & 0xFF
+    return bytes(frame)
+
+
 def _keys(reading):
     """Sensor key -> SensorPoint for one reading."""
     return {p.key: p for p in profiles.sensors_for(reading)}
@@ -127,6 +138,32 @@ def test_kam_heat():
     assert reading.manufacturer == "KAM", reading.manufacturer
     assert reading.medium_name == "Heat", reading.medium_name
     assert len(reading.records) == 30, len(reading.records)
+
+    points = _keys(reading)
+    energy = points["energy"]
+    assert _close(energy.value, 0.0)
+    assert energy.unit == "GJ"
+    assert energy.sensor.device_class == "energy"
+    assert energy.sensor.state_class == "total_increasing"
+    assert energy.sensor.precision == 1
+    assert energy.translation_key == "heat_energy"
+
+    previous = points["energy_prev1"]
+    assert not previous.enabled
+    assert previous.sensor.state_class is None
+
+
+def test_kam_heat_extended_energy_scaling():
+    """FB08 and FB09 values are joules despite pyMeterBus naming the unit Reserved."""
+    for vife, joules in ((0x08, 100_000_000), (0x09, 1_000_000_000)):
+        reading = api.parse_frame(_kam_heat_with_energy(vife, 1))
+        record = reading.records[0]
+        assert record.vif == "Energy", record.vif
+        assert record.unit == "Reserved", record.unit
+        assert record.value == joules, record.value
+        energy = _keys(reading)["energy"]
+        assert energy.unit == "GJ"
+        assert _close(energy.value, joules / 1e9)
 
 
 def test_apa_snapshot_is_not_a_counter():
